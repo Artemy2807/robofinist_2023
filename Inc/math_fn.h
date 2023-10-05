@@ -14,6 +14,7 @@ extern "C" {
 #define min(a,b) 		(((a) < (b)) ? (a) : (b))
 #define max(a,b) 		(((a) > (b)) ? (a) : (b))
 #define abs(a)			(((a) < 0) ? (-(a)) : (a))
+#define sign(x)			(((x) < 0) ? (-1) : (1))
 
 inline float constrain_angle(float x);
 

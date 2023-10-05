@@ -82,6 +82,9 @@ float ball_angle, ball_distance;
 volatile float wt_z_angle = 0.0f;
 uint8_t wt901_recieved;
 struct PIDUnion wt901_pid;
+
+float optical_pos_x = 0.0f,
+			optical_pos_y = 0.0f;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -104,6 +107,8 @@ void bytes2float(uint8_t *a, float* val);
 
 void play(uint8_t *state);
 uint8_t ball_in_mouth(void);
+
+uint8_t	pickup_position_opt(float yx, float yy, float bx, float by, float *x, float *y);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -190,22 +195,52 @@ int main(void)
 	HAL_UART_Receive_DMA(&huart3, (uint8_t*)&wt901_recieved, 1);
 	while (1)
   {
-		//uint8_t n = CAM_Update();
-		//if(n > 0)
-		//{
-		//	struct TrackingCAMBlobInfo_t info = cam_blobs[0];
-		//}
-		//ticks = n;
-		
-		//if(ticks == 255)
-		//{
-		//	ticks = 0;
-		//}
-		
-		//if(HAL_UART_Receive_IT(&huart1, (uint8_t*)irseeker_received, 11) != HAL_OK)
-		//{
-		//	irseeker_status = irseeker_parser(irseeker_received, &is_ball_exist, &ball_angle, &ball_distance);
-		//}
+		uint8_t n = CAM_Update();
+		if(n > 0)
+		{
+			float yellow_goal_x = 0,
+						yellow_goal_y = 0,
+						blue_goal_x = 0,
+						blue_goal_y = 0;
+			uint8_t yellow_exist = 0,
+					 blue_exist = 0;
+			
+			for(uint8_t i = 0; i < n; ++i)
+			{
+					struct TrackingCAMBlobInfo_t info = cam_blobs[i];
+				
+					if(info.type == 0 && yellow_exist == 0)
+					{
+						// yellow goal
+						yellow_goal_x = (float)info.cx;
+						yellow_goal_y = (float)info.cy;
+						yellow_exist = 1;
+					}
+					else if(info.type == 0)
+					{
+						// blue goal
+						blue_goal_x = (float)info.cx;
+						blue_goal_y = (float)info.cy;
+						blue_exist = 1;
+					}
+			}
+			
+			if(blue_exist && yellow_exist)
+			{
+				if(blue_goal_x > yellow_goal_x)
+				{
+					float tmp = yellow_goal_x;
+					yellow_goal_x = blue_goal_x;
+					blue_goal_x = tmp;
+					
+					tmp = yellow_goal_y;
+					yellow_goal_y = blue_goal_y;
+					blue_goal_y = tmp;
+				}
+				
+				pickup_position_opt(yellow_goal_x, yellow_goal_y, blue_goal_x, blue_goal_y, &optical_pos_x, &optical_pos_y);
+			}
+		}
 
 		play(&game_state);
 
@@ -788,9 +823,13 @@ void play(uint8_t *state)
 		if(compute(&wt901_pid, 3))
 		{
 			wt901_angular_vel = (int16_t)wt901_pid.output;
-
+			
 			float dir = 0;
-			if(irseeker_status != 0 && is_ball_exist != 0)
+			if(abs(optical_pos_x) > 0.14f || abs(optical_pos_y) > 0.55f)
+			{
+				dir = atan2f(optical_pos_y, optical_pos_x) * (180.0f / PI);
+			}
+			else if(irseeker_status != 0 && is_ball_exist != 0)
 			{
 				dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
 				dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
@@ -865,6 +904,63 @@ uint8_t ball_in_mouth(void)
 	}
 	
 	return 0;
+}
+
+void interpolation(float *x, float *y)
+{
+	static const int n = 4;
+	static const float k[n] = 
+	{
+		-252.0f,
+		17.7f,
+		-0.248f,
+		0.00152f
+	};
+	
+	float cx = (*x) - 157.0f,
+				cy = 131.0f - (*y);
+	float r = sqrtf(cx * cx + cy * cy),
+				r_interpolation = 0;
+	float alpha = atan2f(cy, cx);
+	
+	for(uint8_t i = 0; i < n; ++i)
+	{
+		r_interpolation += k[i] * powf(r, (float)i);
+	}
+	
+	r_interpolation /= 2627.0f;
+	(*x) = r_interpolation * cosf(alpha);
+	(*y) = r_interpolation * sinf(alpha);
+}
+
+uint8_t	pickup_position_opt(float yx, float yy, float bx, float by, float *x, float *y)
+{
+	float yellow_radius = sqrtf(powf(yx - 152.0f, 2) + powf(yy - 134.5f, 2));
+	float blue_radius = sqrtf(powf(bx - 152.0f, 2) + powf(by - 134.5f, 2));
+	float gate_distance = sqrtf(powf(yx - bx, 2) + powf(yy - by, 2));
+				
+	float gate_k = (yy - by) / (yx - bx);
+	float gate_b = yy - gate_k * yx;
+				
+	yellow_radius = (yellow_radius / gate_distance) * 2.0f;
+	blue_radius = (blue_radius / gate_distance) * 2.0f;
+				
+	if((yellow_radius + blue_radius) < 2.0f)
+	{
+		return 0;
+	}
+	
+	float cos_alpha = (powf(yellow_radius, 2) - powf(blue_radius, 2) + 4.0f) / (4.0f * yellow_radius);
+	float sin_alpha = sqrtf(1 - powf(cos_alpha, 2));
+					
+	(*x) = 1 - cos_alpha * yellow_radius;
+	(*y) = sin_alpha * yellow_radius;			
+	if((gate_k * 152.0f + gate_b) > 134.5f)
+	{
+		(*y) *= -1;
+	}
+	
+	return 1;
 }
 
 /* USER CODE END 4 */
