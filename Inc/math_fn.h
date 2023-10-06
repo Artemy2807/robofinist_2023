@@ -16,7 +16,11 @@ extern "C" {
 #define abs(a)			(((a) < 0) ? (-(a)) : (a))
 #define sign(x)			(((x) < 0) ? (-1) : (1))
 
-inline float constrain_angle(float x);
+float constrain_angle(float x);
+
+float euclidian_distance_nonsqrt(float x, float y);
+
+float euclidian_distance(float x, float y);
 
 #ifdef __cplusplus
 }

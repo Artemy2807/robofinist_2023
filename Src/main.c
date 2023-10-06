@@ -33,7 +33,9 @@
 
 #define STATE_CATCH_BALL		1
 #define STATE_ROTATE_BACK 	2
-#define STATE_STOP_ROBOT		3
+#define STATE_PICKUP_POINT	3
+#define STATE_MOVE_TO_GOAL	4
+#define STATE_THROW_BALL		5
 
 struct TrackingCAMBlobInfo_t
 {
@@ -85,6 +87,7 @@ struct PIDUnion wt901_pid;
 
 float optical_pos_x = 0.0f,
 			optical_pos_y = 0.0f;
+struct OpticalUnion optu;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -107,8 +110,6 @@ void bytes2float(uint8_t *a, float* val);
 
 void play(uint8_t *state);
 uint8_t ball_in_mouth(void);
-
-uint8_t	pickup_position_opt(float yx, float yy, float bx, float by, float *x, float *y);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -181,15 +182,20 @@ int main(void)
 	TIM1->CCR2 = 965;
 	HAL_Delay(6000);
 
-	wt901_pid.kp = 2.8f;
+	wt901_pid.kp = 3.2f;
 	wt901_pid.ki = 0.00125f;
-	wt901_pid.kd = 15.0f;
+	wt901_pid.kd = 17.0f;
 	wt901_pid.angle_wrap = 1;
-	wt901_pid.out_min = -160.0f;
-	wt901_pid.out_max = 160.0f;
+	wt901_pid.out_min = -180.0f;
+	wt901_pid.out_max = 180.0f;
 	wt901_pid.setpoint = 0.0f;
 	
-	uint8_t game_state = STATE_CATCH_BALL;
+	optu.fcenter_x = 152.0f;
+	optu.fcenter_y = 134.5f;
+	optu.is_rotated = 0;
+	
+	uint8_t game_state = STATE_ROTATE_BACK;
+	uint8_t is_camera_start = 0;
 	
 	HAL_UART_Receive_DMA(&huart1, (uint8_t*)irseeker_received, 11);
 	HAL_UART_Receive_DMA(&huart3, (uint8_t*)&wt901_recieved, 1);
@@ -198,48 +204,39 @@ int main(void)
 		uint8_t n = CAM_Update();
 		if(n > 0)
 		{
-			float yellow_goal_x = 0,
-						yellow_goal_y = 0,
-						blue_goal_x = 0,
-						blue_goal_y = 0;
-			uint8_t yellow_exist = 0,
-					 blue_exist = 0;
+			optu.ygate_x = -1;
+			optu.ygate_y = -1;
+			optu.bgate_x = -1;
+			optu.bgate_y = -1;
 			
 			for(uint8_t i = 0; i < n; ++i)
 			{
 					struct TrackingCAMBlobInfo_t info = cam_blobs[i];
 				
-					if(info.type == 0 && yellow_exist == 0)
+					// for training...
+					if(info.type == 0 && info.cx >= optu.fcenter_x)
 					{
 						// yellow goal
-						yellow_goal_x = (float)info.cx;
-						yellow_goal_y = (float)info.cy;
-						yellow_exist = 1;
+						optu.ygate_x = (int16_t)info.cx;
+						optu.ygate_y = (int16_t)info.cy;
 					}
 					else if(info.type == 0)
 					{
 						// blue goal
-						blue_goal_x = (float)info.cx;
-						blue_goal_y = (float)info.cy;
-						blue_exist = 1;
+						optu.bgate_x = (int16_t)info.cx;
+						optu.bgate_y = (int16_t)info.cy;
 					}
 			}
-			
-			if(blue_exist && yellow_exist)
+			estimate_position(&optu);
+			if(optu.last_status == 1)
 			{
-				if(blue_goal_x > yellow_goal_x)
-				{
-					float tmp = yellow_goal_x;
-					yellow_goal_x = blue_goal_x;
-					blue_goal_x = tmp;
-					
-					tmp = yellow_goal_y;
-					yellow_goal_y = blue_goal_y;
-					blue_goal_y = tmp;
-				}
-				
-				pickup_position_opt(yellow_goal_x, yellow_goal_y, blue_goal_x, blue_goal_y, &optical_pos_x, &optical_pos_y);
+				is_camera_start = 1;
 			}
+		}
+		
+		if(is_camera_start == 0)
+		{
+			continue;
 		}
 
 		play(&game_state);
@@ -792,6 +789,15 @@ void play(uint8_t *state)
 	static uint32_t dribler_timer = 0;
 	static uint8_t dribler_st = 0;
 	static int16_t wt901_angular_vel = 0;
+	static uint32_t goal_time = 0;
+	
+	static float last_global_x, last_global_y;
+	static float nav_points[2][2] = 
+	{
+		{-0.1, 0.4},
+		{-0.1, -0.4}
+	};
+	static uint8_t pickuped_point = 0;
 
 	if((*state) == STATE_CATCH_BALL)
 	{
@@ -825,29 +831,40 @@ void play(uint8_t *state)
 			wt901_angular_vel = (int16_t)wt901_pid.output;
 			
 			float dir = 0;
-			if(abs(optical_pos_x) > 0.14f || abs(optical_pos_y) > 0.55f)
+			
+			uint8_t is_outzone = check_ouzone(&optu, &dir);
+			if(is_outzone == 0)
 			{
-				dir = atan2f(optical_pos_y, optical_pos_x) * (180.0f / PI);
-			}
-			else if(irseeker_status != 0 && is_ball_exist != 0)
-			{
-				dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
-				dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
-					
-				if(fabs(ball_angle) <= 10.0f)
+				if(irseeker_status != 0 && is_ball_exist != 0)
 				{
-					dir = 0.0f;
+					dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
+					dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
+						
+					if(fabs(ball_angle) <= 10.0f)
+					{
+						dir = 0.0f;
+					}
+				}
+				else
+				{
+					ball_vel = 0;
 				}
 			}
 			else
 			{
-				ball_vel = 0;
+				if(optu.is_rotated == 1)
+				{
+					dir += 180.0f;
+				}
 			}
 			move(ball_vel, dir, wt901_angular_vel);
 		}
 		
 		if(ball_in_mouth())
 		{
+			optu.is_rotated = 1;
+			last_global_x = optu.pos_x;
+			last_global_y = optu.pos_y;
 			(*state) = STATE_ROTATE_BACK;
 		}
 	}
@@ -865,19 +882,93 @@ void play(uint8_t *state)
 		{
 			wt901_angular_vel = (int16_t)wt901_pid.output;
 			
-			if(fabs(180.0f - fabs(wt_z_angle)) <= 10.0f)
+			if(fabs(180.0f - fabs(wt_z_angle)) <= 25.0f)
 			{
 				// robot state is not back
-				(*state) = STATE_STOP_ROBOT;
+				//optu.is_rotated = 1;
+				(*state) = STATE_PICKUP_POINT;
 				return;
 			}
 			
 			move(160.0f, 180.0f, wt901_angular_vel);
 		}
 	}
-	else if((*state) == STATE_STOP_ROBOT)
+	else if((*state) == STATE_PICKUP_POINT)
 	{
-		move(0, 0.0f, 0);
+		pickuped_point = 0;
+		float min_distance = 100.0f;
+		
+		for(uint8_t i = 0; i < 2; ++i)
+		{
+			float x = nav_points[i][0],
+						y = nav_points[i][1];
+			float dist_to_nav = euclidian_distance_nonsqrt(x - last_global_x, y - last_global_y);
+			
+			if(dist_to_nav < min_distance)
+			{
+				min_distance = dist_to_nav;
+				pickuped_point = i;
+			}
+		}
+		(*state) = STATE_MOVE_TO_GOAL;
+	}
+	else if((*state) == STATE_MOVE_TO_GOAL)
+	{
+		wt901_pid.input = wt_z_angle;
+		wt901_pid.setpoint = 180.0f;
+		if(compute(&wt901_pid, 3))
+		{
+			wt901_angular_vel = (int16_t)wt901_pid.output;
+			
+			uint8_t vel = 0;
+			float nav_direction = 0.0f;
+			
+			if(optu.last_status == 1)
+			{	
+				float distance_to_nav = euclidian_distance(optu.pos_x - nav_points[pickuped_point][0], optu.pos_y - nav_points[pickuped_point][1]);
+				
+				nav_direction = atan2f(-nav_points[pickuped_point][1] + optu.pos_y, -nav_points[pickuped_point][0] + optu.pos_x) * (180.0f / PI);
+				nav_direction += 180.0f;				
+				nav_direction = constrain_angle(nav_direction);
+				
+				nav_direction *= max(min(distance_to_nav / 0.1f, 1.3f), 1.0f); 
+				nav_direction = constrain_angle(nav_direction);
+				
+				if(abs(180.0f - abs(nav_direction)) <= 10.0f)
+				{
+					nav_direction = 180.0f;
+				}
+				
+				if(distance_to_nav <= 0.02f)
+				{
+					(*state) = STATE_THROW_BALL;
+				}
+				
+				vel = 255;
+			}
+			move(vel, nav_direction, wt901_angular_vel);
+		}
+	}
+	else if((*state) == STATE_THROW_BALL)
+	{
+		if(goal_time == 0)
+		{
+			goal_time = HAL_GetTick();
+		}
+		
+		if((HAL_GetTick() - goal_time) >= 200)
+		{
+			TIM1->CCR2 = 965;
+		}
+		
+		if((HAL_GetTick() - goal_time) >= 400)
+		{
+			goal_time = 0;
+			move(0, 0.0f, 0);
+			while(1);
+		}
+		
+		move(0, 0.0f, 255 * (pickuped_point == 0 ? 1 : -1));
 	}
 }
 
@@ -904,63 +995,6 @@ uint8_t ball_in_mouth(void)
 	}
 	
 	return 0;
-}
-
-void interpolation(float *x, float *y)
-{
-	static const int n = 4;
-	static const float k[n] = 
-	{
-		-252.0f,
-		17.7f,
-		-0.248f,
-		0.00152f
-	};
-	
-	float cx = (*x) - 157.0f,
-				cy = 131.0f - (*y);
-	float r = sqrtf(cx * cx + cy * cy),
-				r_interpolation = 0;
-	float alpha = atan2f(cy, cx);
-	
-	for(uint8_t i = 0; i < n; ++i)
-	{
-		r_interpolation += k[i] * powf(r, (float)i);
-	}
-	
-	r_interpolation /= 2627.0f;
-	(*x) = r_interpolation * cosf(alpha);
-	(*y) = r_interpolation * sinf(alpha);
-}
-
-uint8_t	pickup_position_opt(float yx, float yy, float bx, float by, float *x, float *y)
-{
-	float yellow_radius = sqrtf(powf(yx - 152.0f, 2) + powf(yy - 134.5f, 2));
-	float blue_radius = sqrtf(powf(bx - 152.0f, 2) + powf(by - 134.5f, 2));
-	float gate_distance = sqrtf(powf(yx - bx, 2) + powf(yy - by, 2));
-				
-	float gate_k = (yy - by) / (yx - bx);
-	float gate_b = yy - gate_k * yx;
-				
-	yellow_radius = (yellow_radius / gate_distance) * 2.0f;
-	blue_radius = (blue_radius / gate_distance) * 2.0f;
-				
-	if((yellow_radius + blue_radius) < 2.0f)
-	{
-		return 0;
-	}
-	
-	float cos_alpha = (powf(yellow_radius, 2) - powf(blue_radius, 2) + 4.0f) / (4.0f * yellow_radius);
-	float sin_alpha = sqrtf(1 - powf(cos_alpha, 2));
-					
-	(*x) = 1 - cos_alpha * yellow_radius;
-	(*y) = sin_alpha * yellow_radius;			
-	if((gate_k * 152.0f + gate_b) > 134.5f)
-	{
-		(*y) *= -1;
-	}
-	
-	return 1;
 }
 
 /* USER CODE END 4 */

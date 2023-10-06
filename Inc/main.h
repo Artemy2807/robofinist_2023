@@ -34,6 +34,7 @@ extern "C" {
 /* USER CODE BEGIN Includes */
 #include "drive.h"
 #include "pid.h"
+#include "nav.h"
 #include <math.h>
 #include <cstring>
 /* USER CODE END Includes */
