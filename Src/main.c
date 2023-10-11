@@ -35,7 +35,8 @@
 #define STATE_ROTATE_BACK 	2
 #define STATE_PICKUP_POINT	3
 #define STATE_MOVE_TO_GOAL	4
-#define STATE_THROW_BALL		5
+#define STATE_PREP_THROW		5
+#define STATE_THROW_BALL		6
 
 struct TrackingCAMBlobInfo_t
 {
@@ -180,21 +181,25 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 	TIM1->CCR2 = 965;
-	HAL_Delay(6000);
+	HAL_Delay(12000);
+	
+	//TIM1->CCR2 = 935;
+	//HAL_Delay(3000);
 
-	wt901_pid.kp = 3.2f;
+	wt901_pid.kp = 3.0f;
 	wt901_pid.ki = 0.00125f;
-	wt901_pid.kd = 17.0f;
+	wt901_pid.kd = 18.0f;
 	wt901_pid.angle_wrap = 1;
-	wt901_pid.out_min = -180.0f;
-	wt901_pid.out_max = 180.0f;
+	wt901_pid.out_min = -160.0f;
+	wt901_pid.out_max = 160.0f;
 	wt901_pid.setpoint = 0.0f;
 	
 	optu.fcenter_x = 152.0f;
 	optu.fcenter_y = 134.5f;
 	optu.is_rotated = 0;
 	
-	uint8_t game_state = STATE_ROTATE_BACK;
+	uint8_t game_state = STATE_CATCH_BALL;
+	//uint8_t game_state = STATE_ROTATE_BACK;
 	uint8_t is_camera_start = 0;
 	
 	HAL_UART_Receive_DMA(&huart1, (uint8_t*)irseeker_received, 11);
@@ -794,14 +799,15 @@ void play(uint8_t *state)
 	static float last_global_x, last_global_y;
 	static float nav_points[2][2] = 
 	{
-		{-0.1, 0.4},
-		{-0.1, -0.4}
+		{-0.1, 0.3},
+		{-0.1, -0.3}
 	};
 	static uint8_t pickuped_point = 0;
+	static float correction_kx = 5.77f;
 
 	if((*state) == STATE_CATCH_BALL)
 	{
-		uint8_t ball_vel = 230;
+		uint8_t ball_vel = 255;
 		
 		if(ball_distance < 110.0f && dribler_st == 0)
 		{
@@ -819,7 +825,7 @@ void play(uint8_t *state)
 		{
 			// on dribler
 			TIM1->CCR2 = 935;
-			ball_vel = 160;
+			ball_vel = 185;
 			
 			dribler_st = 0;
 			dribler_timer = 0;
@@ -840,7 +846,7 @@ void play(uint8_t *state)
 					dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
 					dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
 						
-					if(fabs(ball_angle) <= 10.0f)
+					if(fabs(ball_angle) <= 6.0f)
 					{
 						dir = 0.0f;
 					}
@@ -902,7 +908,7 @@ void play(uint8_t *state)
 		{
 			float x = nav_points[i][0],
 						y = nav_points[i][1];
-			float dist_to_nav = euclidian_distance_nonsqrt(x - last_global_x, y - last_global_y);
+			float dist_to_nav = euclidian_distance_nonsqrt((x - last_global_x) * correction_kx, y - last_global_y);
 			
 			if(dist_to_nav < min_distance)
 			{
@@ -914,6 +920,12 @@ void play(uint8_t *state)
 	}
 	else if((*state) == STATE_MOVE_TO_GOAL)
 	{
+		if(ball_in_mouth() == 0)
+		{
+			(*state) = STATE_CATCH_BALL;
+			return;
+		}
+		
 		wt901_pid.input = wt_z_angle;
 		wt901_pid.setpoint = 180.0f;
 		if(compute(&wt901_pid, 3))
@@ -924,24 +936,37 @@ void play(uint8_t *state)
 			float nav_direction = 0.0f;
 			
 			if(optu.last_status == 1)
-			{	
-				float distance_to_nav = euclidian_distance(optu.pos_x - nav_points[pickuped_point][0], optu.pos_y - nav_points[pickuped_point][1]);
+			{					
+				float distance_to_nav = euclidian_distance((optu.pos_x - nav_points[pickuped_point][0]) * correction_kx, optu.pos_y - nav_points[pickuped_point][1]);
 				
-				nav_direction = atan2f(-nav_points[pickuped_point][1] + optu.pos_y, -nav_points[pickuped_point][0] + optu.pos_x) * (180.0f / PI);
-				nav_direction += 180.0f;				
+				nav_direction = atan2f(-nav_points[pickuped_point][1] + optu.pos_y, (-nav_points[pickuped_point][0] + optu.pos_x) * correction_kx) * (180.0f / PI);				
 				nav_direction = constrain_angle(nav_direction);
 				
-				nav_direction *= max(min(distance_to_nav / 0.1f, 1.3f), 1.0f); 
-				nav_direction = constrain_angle(nav_direction);
+				//nav_direction *= max(min(distance_to_nav / 0.1f, 1.3f), 1.0f); 
+				//nav_direction = constrain_angle(nav_direction);
 				
-				if(abs(180.0f - abs(nav_direction)) <= 10.0f)
+				float O = 0.0f;
+				if(nav_direction <= 180.0f && nav_direction >= 0.0f)
 				{
-					nav_direction = 180.0f;
+					O = min(nav_direction * 1.5f, 90.0f);
+				}
+				else
+				{
+					O = max(nav_direction  * 1.5f, -90.0f);
 				}
 				
-				if(distance_to_nav <= 0.02f)
+				nav_direction = nav_direction + O * 0.9f;
+				nav_direction += 180.0f;
+				nav_direction = constrain_angle(nav_direction);
+				
+				/*if(abs(180.0f - abs(nav_direction)) <= 5.0f)
 				{
-					(*state) = STATE_THROW_BALL;
+					nav_direction = 180.0f;
+				}*/
+				
+				if(distance_to_nav <= 0.085f)
+				{
+					(*state) = STATE_PREP_THROW;
 				}
 				
 				vel = 255;
@@ -949,26 +974,73 @@ void play(uint8_t *state)
 			move(vel, nav_direction, wt901_angular_vel);
 		}
 	}
+	else if((*state) == STATE_PREP_THROW)
+	{
+		//TIM1->CCR2 = 930;
+		wt901_pid.input = wt_z_angle;
+		wt901_pid.setpoint = 180.0f;
+		if(compute(&wt901_pid, 3))
+		{
+			wt901_angular_vel = (int16_t)wt901_pid.output;
+			
+			if(fabs(180.0f - fabs(wt_z_angle)) <= 15.0f)
+			{
+				// robot state is not back
+				//optu.is_rotated = 1;
+				//(*state) = STATE_THROW_BALL;
+				(*state) = STATE_THROW_BALL;
+				return;
+			}
+			
+			move(0, 0.0f, max(min(wt901_angular_vel, 145.0f), -145.0f));
+		}
+	}
 	else if((*state) == STATE_THROW_BALL)
 	{
-		if(goal_time == 0)
+		float alpha = wt_z_angle;
+		if(pickuped_point == 1)
 		{
-			goal_time = HAL_GetTick();
+			if(alpha > 0)
+			{
+				alpha = -360.0f + alpha;
+			}
+		}
+		else
+		{
+			if(alpha < 0)
+			{
+				alpha = alpha + 360.0f;
+			}
 		}
 		
-		if((HAL_GetTick() - goal_time) >= 200)
+		if(pickuped_point == 1)
 		{
-			TIM1->CCR2 = 965;
+			if(abs(alpha) <= 15.0f || (wt_z_angle >= 0.0f && wt_z_angle <= 50.0f))
+			{
+				(*state) = STATE_CATCH_BALL;
+				move(0, 0.0f, 0);
+				
+				return;
+			}
 		}
-		
-		if((HAL_GetTick() - goal_time) >= 400)
+		else
 		{
-			goal_time = 0;
-			move(0, 0.0f, 0);
-			while(1);
+			if(abs(alpha) <= 15.0f || (wt_z_angle <= 0.0f && wt_z_angle >= -50.0f))
+			{
+				(*state) = STATE_CATCH_BALL;
+				move(0, 0.0f, 0);
+				
+				return;
+			}
 		}
-		
-		move(0, 0.0f, 255 * (pickuped_point == 0 ? 1 : -1));
+
+		uint8_t vel = 145;
+		if(abs(alpha) <= 180.0f)
+		{
+			vel = 255;
+			
+		}
+		move(0, 0.0f, vel * (pickuped_point == 1 ? 1 : -1));
 	}
 }
 
@@ -983,7 +1055,7 @@ uint8_t ball_in_mouth(void)
 		in_mouth_timer = HAL_GetTick();
 	}
 	
-	if(ball_distance >= 140.0f && in_mouth && (HAL_GetTick() - in_mouth_timer) >= 600)
+	if(ball_distance >= 140.0f && in_mouth && (HAL_GetTick() - in_mouth_timer) >= 1500)
 	{
 		return 1;
 	}
