@@ -37,6 +37,7 @@
 #define STATE_MOVE_TO_GOAL	4
 #define STATE_PREP_THROW		5
 #define STATE_THROW_BALL		6
+#define STATE_SIMPLE_GOAL		7
 
 struct TrackingCAMBlobInfo_t
 {
@@ -199,7 +200,7 @@ int main(void)
 	optu.is_rotated = 0;
 	
 	uint8_t game_state = STATE_CATCH_BALL;
-	//uint8_t game_state = STATE_ROTATE_BACK;
+	//uint8_t game_state = STATE_SIMPLE_GOAL;
 	uint8_t is_camera_start = 0;
 	
 	HAL_UART_Receive_DMA(&huart1, (uint8_t*)irseeker_received, 11);
@@ -794,7 +795,6 @@ void play(uint8_t *state)
 	static uint32_t dribler_timer = 0;
 	static uint8_t dribler_st = 0;
 	static int16_t wt901_angular_vel = 0;
-	static uint32_t goal_time = 0;
 	
 	static float last_global_x, last_global_y;
 	static float nav_points[2][2] = 
@@ -838,31 +838,56 @@ void play(uint8_t *state)
 			
 			float dir = 0;
 			
-			uint8_t is_outzone = check_ouzone(&optu, &dir);
-			if(is_outzone == 0)
+			if(optu.last_status)
 			{
-				if(irseeker_status != 0 && is_ball_exist != 0)
+				if(optu.pos_x <= -0.1f && optu.is_rotated)
 				{
-					dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
-					dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
-						
-					if(fabs(ball_angle) <= 6.0f)
+					float ball_angle_transformed = ball_angle;
+					if(optu.is_rotated == 1)
 					{
-						dir = 0.0f;
+						ball_angle_transformed += 180.0f;
+						ball_angle_transformed = constrain_angle(ball_angle_transformed);
+					}
+					
+					if(ball_angle_transformed >= -100.0f && ball_angle_transformed <= 100.0f)
+					{
+						(*state) = STATE_SIMPLE_GOAL;
+					}
+					return;
+				}
+				
+				uint8_t is_outzone = check_ouzone(&optu, &dir);
+				if(is_outzone == 0)
+				{
+					if(irseeker_status != 0 && is_ball_exist != 0)
+					{
+						dir = fabs(ball_angle) * 1.16666666667f + 40.0f;
+						dir = (ball_angle < 0 ? -dir : dir) * (ball_distance / 95.0f);
+							
+						if(fabs(ball_angle) <= 6.0f)
+						{
+							dir = 0.0f;
+						}
+					}
+					else
+					{
+						ball_vel = 0;
 					}
 				}
 				else
 				{
-					ball_vel = 0;
+					if(optu.is_rotated == 1)
+					{
+						dir += 180.0f;
+					}
 				}
 			}
 			else
 			{
-				if(optu.is_rotated == 1)
-				{
-					dir += 180.0f;
-				}
+				ball_vel = 0;
+				dir = 0.0f;
 			}
+			
 			move(ball_vel, dir, wt901_angular_vel);
 		}
 		
@@ -1041,6 +1066,54 @@ void play(uint8_t *state)
 			
 		}
 		move(0, 0.0f, vel * (pickuped_point == 1 ? 1 : -1));
+	}
+	else if((*state) == STATE_SIMPLE_GOAL)
+	{		
+		wt901_pid.input = wt_z_angle;
+		if(compute(&wt901_pid, 3))
+		{
+			wt901_angular_vel = (int16_t)wt901_pid.output;
+			float nav_direction = 0.0f;
+			uint8_t vel = 0;
+			
+			if(optu.last_status && is_ball_exist)
+			{
+				uint8_t is_outzone = check_ouzone(&optu, &nav_direction);
+				if(is_outzone == 0)
+				{
+					float gate_angle = atan2f(optu.pos_y, (0.25f + optu.pos_x) * correction_kx) * (180.0f / PI);
+					float ball_angle_transformed = ball_angle;
+					if(optu.is_rotated == 1)
+					{
+						ball_angle_transformed += 180.0f;
+						ball_angle_transformed = constrain_angle(ball_angle_transformed);
+					}
+					
+					nav_direction = ball_angle_transformed - (gate_angle - ball_angle_transformed) * 2.0f;
+					if(optu.is_rotated == 1)
+					{
+						nav_direction += 180.0f;
+					}
+					
+					if((optu.pos_x >= -0.1f && (ball_angle_transformed < -110.0f || ball_angle_transformed > 110.0f)) || (optu.pos_x >= -0.002))
+					{
+						(*state) = STATE_CATCH_BALL;
+						return;
+					}
+				}
+				else
+				{
+					if(optu.is_rotated == 1)
+					{
+						nav_direction += 180.0f;
+					}
+				}
+				
+				vel = 255;
+			}
+			
+			move(vel, nav_direction, wt901_angular_vel);
+		}
 	}
 }
 
