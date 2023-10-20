@@ -10,12 +10,12 @@ extern "C" {
 
 #define COAST_MODE 	(uint8_t)0
 #define BRAKE_MODE 	(uint8_t)1
-#define MIN_DUTY		(uint32_t)100
+#define MIN_DUTY		(uint32_t)150
 #define MAX_DUTY		(uint32_t)255
 
 // A motor
-#define MOTORA_A		TIM2->CCR2
-#define MOTORA_B		TIM2->CCR1
+#define MOTORA_A		TIM2->CCR1
+#define MOTORA_B		TIM2->CCR2
 // B motor
 #define MOTORB_A		TIM12->CCR2
 #define MOTORB_B		TIM8->CCR2

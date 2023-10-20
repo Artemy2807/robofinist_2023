@@ -112,6 +112,8 @@ void bytes2float(uint8_t *a, float* val);
 
 void play(uint8_t *state);
 uint8_t ball_in_mouth(void);
+
+uint8_t update_angular(int16_t* angular_vel);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -187,12 +189,12 @@ int main(void)
 	//TIM1->CCR2 = 935;
 	//HAL_Delay(3000);
 
-	wt901_pid.kp = 3.0f;
-	wt901_pid.ki = 0.00125f;
-	wt901_pid.kd = 18.0f;
+	wt901_pid.kp = 0.4f;
+	wt901_pid.ki = 0.0000125f; // 0.00125f;
+	wt901_pid.kd = 1.2f; // 18.0f;
 	wt901_pid.angle_wrap = 1;
-	wt901_pid.out_min = -160.0f;
-	wt901_pid.out_max = 160.0f;
+	wt901_pid.out_min = -60.0f;
+	wt901_pid.out_max = 60.0f;
 	wt901_pid.setpoint = 0.0f;
 	
 	optu.fcenter_x = 152.0f;
@@ -244,6 +246,13 @@ int main(void)
 		{
 			continue;
 		}
+		
+		/*int16_t ang;
+		if(update_angular(&ang))
+		{
+			// 0 ... 105
+			move(80, 0.0f, ang);
+		}*/
 
 		play(&game_state);
 
@@ -410,9 +419,9 @@ static void MX_TIM2_Init(void)
 
   /* USER CODE END TIM2_Init 1 */
   htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
+  htim2.Init.Prescaler = 3-1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 255;
+  htim2.Init.Period = 256-1;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim2) != HAL_OK)
@@ -472,9 +481,9 @@ static void MX_TIM8_Init(void)
 
   /* USER CODE END TIM8_Init 1 */
   htim8.Instance = TIM8;
-  htim8.Init.Prescaler = 0;
+  htim8.Init.Prescaler = 3-1;
   htim8.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim8.Init.Period = 255;
+  htim8.Init.Period = 256-1;
   htim8.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim8.Init.RepetitionCounter = 0;
   htim8.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
@@ -543,9 +552,9 @@ static void MX_TIM12_Init(void)
 
   /* USER CODE END TIM12_Init 1 */
   htim12.Instance = TIM12;
-  htim12.Init.Prescaler = 0;
+  htim12.Init.Prescaler = 3-1;
   htim12.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim12.Init.Period = 255;
+  htim12.Init.Period = 256-1;
   htim12.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim12.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_PWM_Init(&htim12) != HAL_OK)
@@ -807,7 +816,7 @@ void play(uint8_t *state)
 
 	if((*state) == STATE_CATCH_BALL)
 	{
-		uint8_t ball_vel = 255;
+		uint8_t ball_vel = 80;
 		
 		if(ball_distance < 110.0f && dribler_st == 0)
 		{
@@ -825,21 +834,20 @@ void play(uint8_t *state)
 		{
 			// on dribler
 			TIM1->CCR2 = 935;
-			ball_vel = 185;
+			ball_vel = 50;
 			
 			dribler_st = 0;
 			dribler_timer = 0;
 		}
-    
-		wt901_pid.input = wt_z_angle;
-		if(compute(&wt901_pid, 3))
+		
+		int16_t angular_vel;
+		if(update_angular(&angular_vel))
 		{
-			wt901_angular_vel = (int16_t)wt901_pid.output;
-			
 			float dir = 0;
 			
 			if(optu.last_status)
 			{
+				/*
 				if(optu.pos_x <= -0.1f && optu.is_rotated)
 				{
 					float ball_angle_transformed = ball_angle;
@@ -855,6 +863,7 @@ void play(uint8_t *state)
 					}
 					return;
 				}
+				*/
 				
 				uint8_t is_outzone = check_ouzone(&optu, &dir);
 				if(is_outzone == 0)
@@ -888,7 +897,7 @@ void play(uint8_t *state)
 				dir = 0.0f;
 			}
 			
-			move(ball_vel, dir, wt901_angular_vel);
+			move(ball_vel, dir, angular_vel);
 		}
 		
 		if(ball_in_mouth())
@@ -909,7 +918,7 @@ void play(uint8_t *state)
 		
 		wt901_pid.input = wt_z_angle;
 		wt901_pid.setpoint = 180.0f;
-		if(compute(&wt901_pid, 3))
+		if(compute(&wt901_pid, 10))
 		{
 			wt901_angular_vel = (int16_t)wt901_pid.output;
 			
@@ -921,7 +930,7 @@ void play(uint8_t *state)
 				return;
 			}
 			
-			move(160.0f, 180.0f, wt901_angular_vel);
+			move(15, 180.0f, max(min(wt901_angular_vel, 20), -20));
 		}
 	}
 	else if((*state) == STATE_PICKUP_POINT)
@@ -953,7 +962,7 @@ void play(uint8_t *state)
 		
 		wt901_pid.input = wt_z_angle;
 		wt901_pid.setpoint = 180.0f;
-		if(compute(&wt901_pid, 3))
+		if(compute(&wt901_pid, 10))
 		{
 			wt901_angular_vel = (int16_t)wt901_pid.output;
 			
@@ -980,7 +989,7 @@ void play(uint8_t *state)
 					O = max(nav_direction  * 1.5f, -90.0f);
 				}
 				
-				nav_direction = nav_direction + O * 0.9f;
+				nav_direction = nav_direction + O * 1.2f;
 				nav_direction += 180.0f;
 				nav_direction = constrain_angle(nav_direction);
 				
@@ -989,18 +998,21 @@ void play(uint8_t *state)
 					nav_direction = 180.0f;
 				}*/
 				
-				if(distance_to_nav <= 0.085f)
+				if(distance_to_nav <= 0.20f)
 				{
 					(*state) = STATE_PREP_THROW;
 				}
 				
-				vel = 255;
+				vel = 85;
 			}
 			move(vel, nav_direction, wt901_angular_vel);
 		}
 	}
 	else if((*state) == STATE_PREP_THROW)
 	{
+		(*state) = STATE_THROW_BALL;
+		return;
+		
 		//TIM1->CCR2 = 930;
 		wt901_pid.input = wt_z_angle;
 		wt901_pid.setpoint = 180.0f;
@@ -1017,7 +1029,7 @@ void play(uint8_t *state)
 				return;
 			}
 			
-			move(0, 0.0f, max(min(wt901_angular_vel, 145.0f), -145.0f));
+			move(0, 0.0f, max(min(wt901_angular_vel, 190.0f), -190.0f));
 		}
 	}
 	else if((*state) == STATE_THROW_BALL)
@@ -1059,10 +1071,10 @@ void play(uint8_t *state)
 			}
 		}
 
-		uint8_t vel = 145;
+		int16_t vel = 60;
 		if(abs(alpha) <= 180.0f)
 		{
-			vel = 255;
+			vel = 105;
 			
 		}
 		move(0, 0.0f, vel * (pickuped_point == 1 ? 1 : -1));
@@ -1140,6 +1152,19 @@ uint8_t ball_in_mouth(void)
 	}
 	
 	return 0;
+}
+
+uint8_t update_angular(int16_t* angular_vel)
+{
+		wt901_pid.input = wt_z_angle;
+		if(compute(&wt901_pid, 10))
+		{
+			(*angular_vel) = (int16_t)wt901_pid.output;
+			
+			return 1;
+		}
+		
+		return 0;
 }
 
 /* USER CODE END 4 */
