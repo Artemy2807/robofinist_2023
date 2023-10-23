@@ -90,6 +90,10 @@ struct PIDUnion wt901_pid;
 float optical_pos_x = 0.0f,
 			optical_pos_y = 0.0f;
 struct OpticalUnion optu;
+
+float xestimate = 0.0f,
+			yestimate = 0.0f;
+uint8_t is_ok = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -184,7 +188,7 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
 	TIM1->CCR2 = 965;
-	HAL_Delay(12000);
+	HAL_Delay(6000);
 	
 	//TIM1->CCR2 = 935;
 	//HAL_Delay(3000);
@@ -200,6 +204,7 @@ int main(void)
 	optu.fcenter_x = 152.0f;
 	optu.fcenter_y = 134.5f;
 	optu.is_rotated = 0;
+	optu.gradius = -1.0;
 	
 	uint8_t game_state = STATE_CATCH_BALL;
 	//uint8_t game_state = STATE_SIMPLE_GOAL;
@@ -222,13 +227,13 @@ int main(void)
 					struct TrackingCAMBlobInfo_t info = cam_blobs[i];
 				
 					// for training...
-					if(info.type == 0 && info.cx >= optu.fcenter_x)
+					if(info.type == 0)
 					{
 						// yellow goal
 						optu.ygate_x = (int16_t)info.cx;
 						optu.ygate_y = (int16_t)info.cy;
 					}
-					else if(info.type == 0)
+					else if(info.type == 1)
 					{
 						// blue goal
 						optu.bgate_x = (int16_t)info.cx;
@@ -247,6 +252,8 @@ int main(void)
 			continue;
 		}
 		
+		is_ok = update_density(optu.pos_x, optu.pos_y, &xestimate, &yestimate);
+		
 		/*int16_t ang;
 		if(update_angular(&ang))
 		{
@@ -254,7 +261,7 @@ int main(void)
 			move(80, 0.0f, ang);
 		}*/
 
-		play(&game_state);
+		//play(&game_state);
 
     /* USER CODE END WHILE */
 
@@ -801,8 +808,6 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 void play(uint8_t *state)
 {
-	static uint32_t dribler_timer = 0;
-	static uint8_t dribler_st = 0;
 	static int16_t wt901_angular_vel = 0;
 	
 	static float last_global_x, last_global_y;
@@ -818,26 +823,16 @@ void play(uint8_t *state)
 	{
 		uint8_t ball_vel = 80;
 		
-		if(ball_distance < 110.0f && dribler_st == 0)
+		if(ball_distance < 110.0f)
 		{
-			dribler_st = 1;
-			dribler_timer = HAL_GetTick();
+			try_change_dribler_state(0); // try to off dribler
 		}
-		
-		if(ball_distance < 110.0f && dribler_st == 1 && (HAL_GetTick() - dribler_timer) >= 1000)
+		else
 		{
-			// off dribler
-			TIM1->CCR2 = 965;
-		}
-		
-		if(ball_distance >= 110.0f)
-		{
-			// on dribler
-			TIM1->CCR2 = 935;
-			ball_vel = 50;
+			try_change_dribler_state(1); // on dribler
 			
-			dribler_st = 0;
-			dribler_timer = 0;
+			// set low linear movement speed to grab the ball (when ball is near by robot)
+			ball_vel = 50;
 		}
 		
 		int16_t angular_vel;
@@ -1163,7 +1158,6 @@ uint8_t update_angular(int16_t* angular_vel)
 			
 			return 1;
 		}
-		
 		return 0;
 }
 

@@ -35,6 +35,7 @@ extern "C" {
 #include "drive.h"
 #include "pid.h"
 #include "nav.h"
+#include "game_logic.h"
 #include <math.h>
 #include <cstring>
 /* USER CODE END Includes */

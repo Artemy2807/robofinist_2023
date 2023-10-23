@@ -21,13 +21,13 @@ struct OpticalUnion
 
 	float pos_x,
 				pos_y;
+	float gradius;
 	
 	uint8_t last_status,
 					is_rotated;
 };
 
-float median(float x, float buffer[3], uint8_t *index);
-float run_average(float x, float average, float *buffer, uint8_t *index, uint8_t size);
+uint8_t update_density(float xpose, float ypose, float *xestimate, float *yestimate);
 
 uint8_t estimate_position(struct OpticalUnion *optu);
 uint8_t check_ouzone(struct OpticalUnion *optu, float *direction);
